@@ -26,7 +26,7 @@ class NotificationWatcherApp(rumps.App):
     def __init__(self) -> None:
         super().__init__("NC", title="NC", quit_button=None)
         self._db_path: Path | None = get_notification_db_path()
-        self._poll_seconds = 2.0
+        self._poll_seconds = 0.5
         self._app_filter: str | None = None
         self._discord_only = False
         self._notif_queue: queue.Queue = queue.Queue()
@@ -41,6 +41,7 @@ class NotificationWatcherApp(rumps.App):
             [
                 "Poll interval",
                 [
+                    rumps.MenuItem("500 ms", callback=self._set_poll),
                     rumps.MenuItem("1 s", callback=self._set_poll),
                     rumps.MenuItem("2 s", callback=self._set_poll),
                     rumps.MenuItem("5 s", callback=self._set_poll),
@@ -59,7 +60,7 @@ class NotificationWatcherApp(rumps.App):
             "Quit",
         ]
         self._poll_menu = self.menu["Poll interval"]
-        self._poll_menu["2 s"].state = True
+        self._poll_menu["500 ms"].state = True
 
         if self._db_path is None or not self._db_path.exists():
             rumps.alert(
@@ -71,6 +72,7 @@ class NotificationWatcherApp(rumps.App):
         else:
             self._start_watcher_thread()
             rumps.Timer(self._drain_queue, QUEUE_DRAIN_INTERVAL).start()
+            webhook_sender.get_app_logger().info("Watcher started (db=%s)", self._db_path)
 
     def _toggle_discord(self, sender: rumps.MenuItem) -> None:
         self._discord_only = not sender.state
@@ -82,7 +84,9 @@ class NotificationWatcherApp(rumps.App):
             if isinstance(item, rumps.MenuItem):
                 item.state = item == sender
         label = sender.title
-        if label == "1 s":
+        if label == "500 ms":
+            self._poll_seconds = 0.5
+        elif label == "1 s":
             self._poll_seconds = 1.0
         elif label == "2 s":
             self._poll_seconds = 2.0
@@ -168,16 +172,17 @@ class NotificationWatcherApp(rumps.App):
 
     def _rebuild_recent_menu(self) -> None:
         recent_menu = self.menu["Recent"]
-        for key in list(recent_menu.keys()):
-            del recent_menu[key]
+        recent_menu.clear()
         if not self._recent:
-            recent_menu["0"] = rumps.MenuItem("(none)")
+            recent_menu.add(rumps.MenuItem("(none)"))
             return
+        items = []
         for i, (app_id, title, subtitle, body, delivered_date) in enumerate(self._recent):
             label = f"{title or '(no title)'} — {app_id}" if app_id else (title or "(no title)")
-            if len(label) > 60:
-                label = label[:57] + "..."
-            recent_menu[str(i)] = rumps.MenuItem(label)
+            if len(label) > 55:
+                label = label[:52] + "..."
+            items.append(rumps.MenuItem(f"{i + 1}. {label}"))
+        recent_menu.update(items)
 
     @rumps.clicked("Quit")
     def quit_app(self, _: rumps.MenuItem) -> None:
