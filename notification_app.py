@@ -5,155 +5,275 @@ Menu bar app for watching macOS Notification Center. Requires Full Disk Access.
 import queue
 import subprocess
 import threading
-import time
 from pathlib import Path
 
 import rumps
 
 import webhook_sender
-from notification_watcher import (
-    format_delivered_date,
-    get_notification_db_path,
-    iter_notifications,
-)
+from notification_watcher.config import get_config_path, get_log_path, load_config, save_config
+from notification_watcher.login import is_launch_at_login_enabled, open_full_disk_access_settings, set_launch_at_login
+from notification_watcher.macos import format_delivered_date, get_notification_db_path
+from notification_watcher.platform import get_backend
+from notification_watcher.watcher import watch
 
 RECENT_MAX = 10
 QUEUE_DRAIN_INTERVAL = 0.5
-FULL_DISK_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+FDA_RECHECK_INTERVAL = 5.0
+POLL_LABELS = {
+    0.01: "10 ms",
+    0.05: "50 ms",
+    0.1: "100 ms",
+    0.5: "500 ms",
+    1.0: "1 s",
+}
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
 
 class NotificationWatcherApp(rumps.App):
     def __init__(self) -> None:
-        super().__init__("NC", title="NC", quit_button=None)
+        icon = ASSETS_DIR / "icon.icns"
+        super().__init__(
+            "Notification Watcher",
+            icon=str(icon) if icon.exists() else None,
+            title=None if icon.exists() else "NC",
+            quit_button=None,
+        )
+        self._config = load_config()
         self._db_path: Path | None = get_notification_db_path()
-        self._poll_seconds = 0.5
-        self._app_filter: str | None = None
-        self._discord_only = False
+        self._poll_seconds = self._config.poll_seconds
+        self._app_filter = self._config.effective_app_filter()
+        self._discord_only = self._config.discord_only
         self._notif_queue: queue.Queue = queue.Queue()
         self._stop_thread = threading.Event()
+        self._watcher_thread: threading.Thread | None = None
         self._recent: list[tuple[str, str, str, str, float | None]] = []
-        self._seen: set[tuple[str, str, str, str, float | None]] = set()
+        self._status = "Starting..."
 
         self.menu = [
-            ["Recent", [rumps.MenuItem("(none)")]],
+            rumps.MenuItem("Status: Starting...", callback=None),
+            None,
+            ["Recent", [rumps.MenuItem("(none)", callback=self._show_recent_detail)]],
             None,
             rumps.MenuItem("Discord only", callback=self._toggle_discord),
+            rumps.MenuItem("Filter by app...", callback=self._set_app_filter),
             [
                 "Poll interval",
                 [
+                    rumps.MenuItem("10 ms", callback=self._set_poll),
+                    rumps.MenuItem("50 ms", callback=self._set_poll),
+                    rumps.MenuItem("100 ms", callback=self._set_poll),
                     rumps.MenuItem("500 ms", callback=self._set_poll),
                     rumps.MenuItem("1 s", callback=self._set_poll),
-                    rumps.MenuItem("2 s", callback=self._set_poll),
-                    rumps.MenuItem("5 s", callback=self._set_poll),
                 ],
             ],
+            None,
+            rumps.MenuItem("Launch at login", callback=self._toggle_launch_at_login),
             None,
             [
                 "Webhooks",
                 [
                     rumps.MenuItem("Add webhook URL...", callback=self._add_webhook),
+                    rumps.MenuItem("Test webhook", callback=self._test_webhook),
                     rumps.MenuItem("Clear all webhooks", callback=self._clear_webhooks),
+                    rumps.MenuItem("View logs", callback=self._view_logs),
                     rumps.MenuItem("Open config file", callback=self._edit_webhook_config),
                 ],
             ],
             None,
             "Quit",
         ]
+        self._status_item = self.menu[0]
         self._poll_menu = self.menu["Poll interval"]
-        self._poll_menu["500 ms"].state = True
+        self._recent_menu = self.menu["Recent"]
+        self._launch_item = self.menu["Launch at login"]
+        self._discord_item = self.menu["Discord only"]
 
+        self._apply_poll_menu_state()
+        self._discord_item.state = self._discord_only
+        self._launch_item.state = is_launch_at_login_enabled()
+        if self._config.launch_at_login != self._launch_item.state:
+            self._config.launch_at_login = self._launch_item.state
+            save_config(self._config)
+
+        rumps.Timer(self._drain_queue, QUEUE_DRAIN_INTERVAL).start()
+        rumps.Timer(self._recheck_permissions, FDA_RECHECK_INTERVAL).start()
+        self._update_status_from_db()
+        webhook_sender.get_app_logger().info("App started (db=%s)", self._db_path)
+
+    def _save_config(self) -> None:
+        self._config.poll_seconds = self._poll_seconds
+        self._config.discord_only = self._discord_only
+        self._app_filter = self._config.effective_app_filter()
+        save_config(self._config)
+
+    def _set_status(self, status: str) -> None:
+        self._status = status
+        self._status_item.title = f"Status: {status}"
+
+    def _update_status_from_db(self) -> None:
+        self._db_path = get_notification_db_path()
         if self._db_path is None or not self._db_path.exists():
-            rumps.alert(
-                "Full Disk Access required",
-                "Notification Watcher needs Full Disk Access to read notifications.\n\n"
-                "System Settings will open. Add this app (or Terminal) to Full Disk Access.",
-            )
-            subprocess.run(["open", FULL_DISK_URL], check=False, timeout=5)
-        else:
+            self._set_status("Waiting for Full Disk Access")
+            if self._watcher_thread and self._watcher_thread.is_alive():
+                self._stop_thread.set()
+            return
+        self._set_status("Watching")
+        if self._watcher_thread is None or not self._watcher_thread.is_alive():
+            self._stop_thread.clear()
             self._start_watcher_thread()
-            rumps.Timer(self._drain_queue, QUEUE_DRAIN_INTERVAL).start()
-            webhook_sender.get_app_logger().info("Watcher started (db=%s)", self._db_path)
+
+    def _recheck_permissions(self, _: rumps.Timer) -> None:
+        path = get_notification_db_path()
+        exists = path is not None and path.exists()
+        if exists and self._status.startswith("Waiting"):
+            self._db_path = path
+            self._update_status_from_db()
+            rumps.notification(
+                "Notification Watcher",
+                "Full Disk Access granted",
+                "Now watching notifications.",
+            )
+        elif not exists and self._status == "Watching":
+            self._set_status("Waiting for Full Disk Access")
+            self._stop_thread.set()
+            open_full_disk_access_settings()
+
+    def _apply_poll_menu_state(self) -> None:
+        label = POLL_LABELS.get(self._poll_seconds, "500 ms")
+        for item in self._poll_menu.values():
+            if isinstance(item, rumps.MenuItem):
+                item.state = item.title == label
 
     def _toggle_discord(self, sender: rumps.MenuItem) -> None:
         self._discord_only = not sender.state
         sender.state = self._discord_only
-        self._app_filter = "%discord%" if self._discord_only else None
+        self._config.discord_only = self._discord_only
+        self._app_filter = self._config.effective_app_filter()
+        self._save_config()
+
+    def _set_app_filter(self, _: rumps.MenuItem) -> None:
+        window = rumps.Window(
+            message="App identifier filter (SQL LIKE, e.g. %discord%):",
+            title="Filter by app",
+            default_text=self._config.app_filter or "",
+            ok="Apply",
+            cancel="Cancel",
+        )
+        response = window.run()
+        if response.clicked != 1:
+            return
+        value = (response.text or "").strip()
+        self._config.app_filter = value or None
+        if value:
+            self._discord_only = False
+            self._config.discord_only = False
+            self._discord_item.state = False
+        self._app_filter = self._config.effective_app_filter()
+        self._save_config()
 
     def _set_poll(self, sender: rumps.MenuItem) -> None:
         for item in self._poll_menu.values():
             if isinstance(item, rumps.MenuItem):
                 item.state = item == sender
-        label = sender.title
-        if label == "500 ms":
-            self._poll_seconds = 0.5
-        elif label == "1 s":
-            self._poll_seconds = 1.0
-        elif label == "2 s":
-            self._poll_seconds = 2.0
-        elif label == "5 s":
-            self._poll_seconds = 5.0
+        for seconds, label in POLL_LABELS.items():
+            if sender.title == label:
+                self._poll_seconds = seconds
+                break
+        self._save_config()
+
+    def _toggle_launch_at_login(self, sender: rumps.MenuItem) -> None:
+        enabled = not sender.state
+        set_launch_at_login(enabled)
+        sender.state = is_launch_at_login_enabled()
+        self._config.launch_at_login = sender.state
+        save_config(self._config)
+
+    def _on_notification(
+        self, app_id: str, title: str, subtitle: str, body: str, delivered_date: float | None
+    ) -> None:
+        self._notif_queue.put((app_id, title, subtitle, body, delivered_date))
+
+    def _on_error(self, exc: Exception) -> None:
+        self._set_status(f"Error: {exc}")
 
     def _watcher_loop(self) -> None:
-        while not self._stop_thread.is_set() and self._db_path and self._db_path.exists():
-            try:
-                for app_id, title, subtitle, body, _presented, delivered_date in iter_notifications(
-                    self._db_path, self._app_filter
-                ):
-                    if self._stop_thread.is_set():
-                        return
-                    key = (app_id, title, subtitle, body, delivered_date)
-                    if key not in self._seen:
-                        self._seen.add(key)
-                        self._notif_queue.put((app_id, title, subtitle, body, delivered_date))
-            except FileNotFoundError:
-                pass
-            for _ in range(int(self._poll_seconds * 10)):
-                if self._stop_thread.is_set():
-                    return
-                time.sleep(0.1)
+        backend = get_backend()
+        if not self._db_path:
+            return
+
+        def stop_flag() -> bool:
+            return self._stop_thread.is_set()
+
+        watch(
+            backend,
+            self._db_path,
+            lambda: self._poll_seconds,
+            lambda: self._app_filter,
+            self._on_notification,
+            stop_flag=stop_flag,
+            on_error=self._on_error,
+        )
 
     def _start_watcher_thread(self) -> None:
-        t = threading.Thread(target=self._watcher_loop, daemon=True)
-        t.start()
+        self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
+        self._watcher_thread.start()
 
     def _add_webhook(self, _: rumps.MenuItem) -> None:
         window = rumps.Window(
-            message="Enter webhook URL (Discord notifications will be POSTed here):",
+            message="Enter HTTPS webhook URL:",
             title="Add webhook",
             default_text="https://",
             ok="Add",
             cancel="Cancel",
         )
         response = window.run()
-        if response.clicked == 1:
-            url = (response.text or "").strip()
-            if not url:
-                rumps.alert("URL is empty.", "Add webhook")
-                return
-            if not url.startswith(("http://", "https://")):
-                rumps.alert("URL must start with http:// or https://", "Add webhook")
-                return
-            urls = webhook_sender.load_webhook_urls()
-            if url in urls:
-                rumps.alert("That URL is already in the list.", "Add webhook")
-                return
-            urls.append(url)
-            webhook_sender.save_webhook_urls(urls)
-            rumps.notification("Notification Watcher", "Webhook added", url[:60] + "..." if len(url) > 60 else url)
+        if response.clicked != 1:
+            return
+        url = (response.text or "").strip()
+        if not url:
+            rumps.alert("URL is empty.", "Add webhook")
+            return
+        error = webhook_sender.validate_webhook_url(url)
+        if error:
+            rumps.alert(error, "Add webhook")
+            return
+        if url in self._config.webhook_urls:
+            rumps.alert("That URL is already in the list.", "Add webhook")
+            return
+        self._config.webhook_urls.append(url)
+        save_config(self._config)
+        rumps.notification(
+            "Notification Watcher",
+            "Webhook added",
+            url[:60] + "..." if len(url) > 60 else url,
+        )
+
+    def _test_webhook(self, _: rumps.MenuItem) -> None:
+        ok, message = webhook_sender.send_test_webhook()
+        title = "Webhook test" if ok else "Webhook test failed"
+        rumps.alert(message, title)
 
     def _clear_webhooks(self, _: rumps.MenuItem) -> None:
-        if not webhook_sender.load_webhook_urls():
+        if not self._config.webhook_urls:
             rumps.alert("No webhooks configured.", "Webhooks")
             return
         if rumps.alert("Clear all webhook URLs?", "Webhooks", ok="Clear all", cancel="Cancel") == 1:
-            webhook_sender.save_webhook_urls([])
-            rumps.notification("Notification Watcher", "All webhooks cleared", "All webhook URLs have been removed.")
+            self._config.webhook_urls = []
+            save_config(self._config)
+            rumps.notification("Notification Watcher", "All webhooks cleared", "")
 
-    def _edit_webhook_config(self, _: rumps.MenuItem) -> None:
-        path = webhook_sender.get_webhook_config_path()
+    def _view_logs(self, _: rumps.MenuItem) -> None:
+        path = get_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            webhook_sender.save_webhook_urls([])
+            path.write_text("", encoding="utf-8")
+        subprocess.run(["open", "-e", str(path)], check=False, timeout=5)
+
+    def _edit_webhook_config(self, _: rumps.MenuItem) -> None:
+        path = get_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            save_config(self._config)
         subprocess.run(["open", "-e", str(path)], check=False, timeout=5)
 
     def _drain_queue(self, _: rumps.Timer) -> None:
@@ -163,26 +283,45 @@ class NotificationWatcherApp(rumps.App):
             except queue.Empty:
                 break
             app_id, title, subtitle, body, delivered_date = item
-            webhook_sender.send_discord_notification(
-                app_id, title, subtitle, body, delivered_date
+            webhook_sender.send_notification_webhook(
+                app_id, title, subtitle, body, delivered_date, self._config
             )
             self._recent.insert(0, item)
             self._recent = self._recent[:RECENT_MAX]
             self._rebuild_recent_menu()
 
+    def _show_recent_detail(self, sender: rumps.MenuItem) -> None:
+        title = sender.title
+        if title in ("(none)",) or not title[0].isdigit():
+            return
+        try:
+            index = int(title.split(".", 1)[0]) - 1
+        except ValueError:
+            return
+        if index < 0 or index >= len(self._recent):
+            return
+        app_id, notif_title, subtitle, body, delivered_date = self._recent[index]
+        message = (
+            f"App: {app_id}\n"
+            f"Time: {format_delivered_date(delivered_date)}\n"
+            f"Title: {notif_title}\n"
+            f"Subtitle: {subtitle}\n"
+            f"Body: {body}"
+        )
+        rumps.alert(message, notif_title or "Notification")
+
     def _rebuild_recent_menu(self) -> None:
-        recent_menu = self.menu["Recent"]
-        recent_menu.clear()
+        self._recent_menu.clear()
         if not self._recent:
-            recent_menu.add(rumps.MenuItem("(none)"))
+            self._recent_menu.add(rumps.MenuItem("(none)", callback=self._show_recent_detail))
             return
         items = []
-        for i, (app_id, title, subtitle, body, delivered_date) in enumerate(self._recent):
+        for i, (app_id, title, _subtitle, _body, _delivered_date) in enumerate(self._recent):
             label = f"{title or '(no title)'} — {app_id}" if app_id else (title or "(no title)")
             if len(label) > 55:
                 label = label[:52] + "..."
-            items.append(rumps.MenuItem(f"{i + 1}. {label}"))
-        recent_menu.update(items)
+            items.append(rumps.MenuItem(f"{i + 1}. {label}", callback=self._show_recent_detail))
+        self._recent_menu.update(items)
 
     @rumps.clicked("Quit")
     def quit_app(self, _: rumps.MenuItem) -> None:
@@ -191,6 +330,14 @@ class NotificationWatcherApp(rumps.App):
 
 
 def main() -> None:
+    path = get_notification_db_path()
+    if path is None or not path.exists():
+        rumps.alert(
+            "Full Disk Access required",
+            "Notification Watcher needs Full Disk Access to read notifications.\n\n"
+            "System Settings will open. Add this app (or Terminal) to Full Disk Access.",
+        )
+        open_full_disk_access_settings()
     app = NotificationWatcherApp()
     app.run()
 

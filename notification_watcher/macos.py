@@ -1,19 +1,14 @@
-"""
-Core logic for reading macOS Notification Center SQLite database.
-No GUI or argparse; used by scraper CLI and menu bar app.
-"""
 import plistlib
 import sqlite3
 import subprocess
-import time
+from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterator
 
-DeliveredDate = float | None
-Notification = tuple[str, str, str, str, int | None, DeliveredDate]
-OnNotification = Callable[[str, str, str, str, DeliveredDate], None]
+from notification_watcher.types import DeliveredDate, Notification
 
 MAC_EPOCH_OFFSET = 978307200
+PLATFORM_NAME = "macos"
 
 
 def _notification_db_candidates() -> Iterator[Path]:
@@ -31,15 +26,23 @@ def _notification_db_candidates() -> Iterator[Path]:
         yield base / "com.apple.notificationcenter" / "db" / "db"
     yield home / "Library" / "Application Support" / "NotificationCenter" / "db2" / "db"
     yield home / "Library" / "Application Support" / "NotificationCenter" / "db" / "db"
-    yield home / "Library" / "Group Containers" / "group.com.apple.UserNotifications" / "Library" / "UserNotifications" / "db2" / "db"
+    yield (
+        home
+        / "Library"
+        / "Group Containers"
+        / "group.com.apple.UserNotifications"
+        / "Library"
+        / "UserNotifications"
+        / "db2"
+        / "db"
+    )
 
 
 def get_notification_db_path() -> Path | None:
     for candidate in _notification_db_candidates():
         if candidate.exists():
             return candidate
-    first = next(_notification_db_candidates(), None)
-    return first
+    return next(_notification_db_candidates(), None)
 
 
 def _to_str(value: object) -> str:
@@ -69,16 +72,24 @@ def parse_notification_plist(data: bytes) -> dict[str, str]:
     return out
 
 
-def format_delivered_date(mac_abs_seconds: DeliveredDate) -> str:
-    if mac_abs_seconds is None or mac_abs_seconds <= 0:
-        return ""
-    from datetime import datetime
+def to_unix_timestamp(delivered_date: DeliveredDate) -> float | None:
+    if delivered_date is None or delivered_date <= 0:
+        return None
+    return delivered_date + MAC_EPOCH_OFFSET
 
-    unix_ts = mac_abs_seconds + MAC_EPOCH_OFFSET
+
+def format_delivered_date(delivered_date: DeliveredDate) -> str:
+    unix_ts = to_unix_timestamp(delivered_date)
+    if unix_ts is None:
+        return ""
     return datetime.utcfromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def iter_notifications(db_path: Path, app_filter: str | None = None) -> Iterator[Notification]:
+def iter_notifications(
+    db_path: Path,
+    app_filter: str | None = None,
+    since_date: DeliveredDate = None,
+) -> Iterator[Notification]:
     if not db_path.exists():
         raise FileNotFoundError(
             f"Notification Center database not found at {db_path}. "
@@ -97,13 +108,19 @@ def iter_notifications(db_path: Path, app_filter: str | None = None) -> Iterator
                 record.delivered_date,
                 record.presented
             FROM record
+            WHERE 1=1
         """
-        params: tuple = ()
+        params: list[object] = []
         if app_filter is not None:
-            sql += " WHERE LOWER((SELECT identifier FROM app WHERE app.app_id = record.app_id)) LIKE ?"
-            params = (app_filter.lower(),)
+            sql += (
+                " AND LOWER((SELECT identifier FROM app WHERE app.app_id = record.app_id)) LIKE ?"
+            )
+            params.append(app_filter.lower())
+        if since_date is not None and since_date > 0:
+            sql += " AND record.delivered_date > ?"
+            params.append(since_date)
         sql += " ORDER BY record.delivered_date DESC"
-        cursor = conn.execute(sql, params)
+        cursor = conn.execute(sql, tuple(params))
         for row in cursor:
             app_id = row["app_id"] or ""
             parsed = parse_notification_plist(row["data"])
@@ -117,29 +134,3 @@ def iter_notifications(db_path: Path, app_filter: str | None = None) -> Iterator
             )
     finally:
         conn.close()
-
-
-def watch(
-    db_path: Path,
-    poll_seconds: float,
-    app_filter: str | None,
-    on_notification: OnNotification,
-    stop_flag: Callable[[], bool] | None = None,
-) -> None:
-    seen: set[tuple[str, str, str, str, DeliveredDate]] = set()
-    while True:
-        if stop_flag and stop_flag():
-            return
-        try:
-            for app_id, title, subtitle, body, _presented, delivered_date in iter_notifications(
-                db_path, app_filter
-            ):
-                if stop_flag and stop_flag():
-                    return
-                key = (app_id, title, subtitle, body, delivered_date)
-                if key not in seen:
-                    seen.add(key)
-                    on_notification(app_id, title, subtitle, body, delivered_date)
-        except FileNotFoundError:
-            pass
-        time.sleep(poll_seconds)

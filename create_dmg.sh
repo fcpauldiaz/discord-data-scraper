@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Create a DMG for distributing Notification Watcher. Run after: python3 setup.py py2app
-set -e
+set -euo pipefail
 APP_NAME="Notification Watcher"
-DMG_NAME="NotificationWatcher"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="${SCRIPT_DIR}/dist"
-VOLUME_NAME="${APP_NAME}"
+VERSION="$(python3 -c "from notification_watcher.version import __version__; print(__version__)")"
+DMG_NAME="NotificationWatcher-${VERSION}"
+STAGING="${DIST_DIR}/dmg-staging"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}.dmg"
 
 if [[ ! -d "${DIST_DIR}/${APP_NAME}.app" ]]; then
@@ -13,6 +14,11 @@ if [[ ! -d "${DIST_DIR}/${APP_NAME}.app" ]]; then
   exit 1
 fi
 
+rm -rf "${STAGING}"
+mkdir -p "${STAGING}"
+cp -R "${DIST_DIR}/${APP_NAME}.app" "${STAGING}/"
+ln -s /Applications "${STAGING}/Applications"
 rm -f "${DMG_PATH}"
-hdiutil create -volname "${VOLUME_NAME}" -srcfolder "${DIST_DIR}/${APP_NAME}.app" -ov -format UDZO "${DMG_PATH}"
+hdiutil create -volname "${APP_NAME}" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}"
+rm -rf "${STAGING}"
 echo "Created ${DMG_PATH}"

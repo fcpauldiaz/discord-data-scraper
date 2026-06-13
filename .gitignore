@@ -11,6 +11,7 @@ dist/
 build/
 *.manifest
 *.spec
+!notification_watcher.spec
 
 # Virtual environments
 .venv/
@@ -32,6 +33,7 @@ env/
 
 # PyInstaller
 *.spec
+!notification_watcher.spec
 warn-*.txt
 
 # Environment / secrets

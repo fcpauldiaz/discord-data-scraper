@@ -1,17 +1,20 @@
 from setuptools import setup
 
+from notification_watcher.version import __version__
+
 APP = ["notification_app.py"]
-DATA_FILES = []
+DATA_FILES = [("assets", ["assets/icon.icns", "assets/icon.png"])]
 OPTIONS = {
     "argv_emulation": False,
+    "iconfile": "assets/icon.icns",
     "includes": ["notification_watcher", "webhook_sender"],
     "packages": ["rumps", "objc", "Foundation", "AppKit"],
     "plist": {
         "CFBundleName": "Notification Watcher",
         "CFBundleDisplayName": "Notification Watcher",
         "CFBundleIdentifier": "com.notificationwatcher.app",
-        "CFBundleVersion": "1.0.0",
-        "CFBundleShortVersionString": "1.0.0",
+        "CFBundleVersion": __version__,
+        "CFBundleShortVersionString": __version__,
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
     },
@@ -19,6 +22,7 @@ OPTIONS = {
 
 setup(
     name="Notification Watcher",
+    version=__version__,
     app=APP,
     data_files=DATA_FILES,
     options={"py2app": OPTIONS},
