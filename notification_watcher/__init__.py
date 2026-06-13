@@ -22,10 +22,14 @@ def iter_notifications(db_path, app_filter=None, since_date=None):
 
 
 def format_delivered_date(delivered_date):
+    if delivered_date is None or delivered_date <= 0:
+        return ""
     return _get().format_delivered_date(delivered_date)
 
 
 def to_unix_timestamp(delivered_date):
+    if delivered_date is None or delivered_date <= 0:
+        return None
     return _get().to_unix_timestamp(delivered_date)
 
 
