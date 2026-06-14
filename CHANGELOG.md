@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- GitHub Releases auto-update for bundled macOS and Windows builds
+- Manual "Check for updates..." in menu bar / tray
+- Sparkle appcast.xml published on each release
+
 ## 1.1.0
 
 - Cross-platform package refactor (`notification_watcher/`)

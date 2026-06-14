@@ -20,6 +20,14 @@ from notification_watcher.config import get_config_path, get_log_path, load_conf
 from notification_watcher.login import is_launch_at_login_enabled, set_launch_at_login
 from notification_watcher.platform import get_backend
 from notification_watcher.types import AppConfig
+from notification_watcher.updater import (
+    check_for_updates,
+    download_and_install,
+    is_bundled_app,
+    release_page_url,
+    schedule_background_checks,
+)
+from notification_watcher.version import __version__
 from notification_watcher.watcher import watch
 from notification_watcher.windows import format_delivered_date, get_notification_db_path
 
@@ -74,6 +82,8 @@ class WindowsNotificationApp:
 
         self._start_background_tasks()
         self._build_tray()
+        if self._config.check_for_updates:
+            schedule_background_checks(self._notify_update_available, enabled=True)
 
     def _save_config(self) -> None:
         self._config.poll_seconds = self._poll_seconds
@@ -231,6 +241,16 @@ class WindowsNotificationApp:
             )
         )
         items.append(pystray.Menu.SEPARATOR)
+        items.append(
+            pystray.MenuItem(
+                "Updates",
+                pystray.Menu(
+                    pystray.MenuItem(f"Version {__version__}", None, enabled=False),
+                    pystray.MenuItem("Check for updates...", self._check_for_updates),
+                ),
+            )
+        )
+        items.append(pystray.Menu.SEPARATOR)
         items.append(pystray.MenuItem("Quit", self._quit))
         return pystray.Menu(*items)
 
@@ -338,6 +358,63 @@ class WindowsNotificationApp:
         if not path.exists():
             path.write_text("", encoding="utf-8")
         subprocess.run(["notepad.exe", str(path)], check=False)
+
+    def _notify_update_available(self, result) -> None:
+        latest = result.latest
+        if latest is None:
+            return
+        self._tk_root.after(
+            0,
+            lambda: messagebox.showinfo(
+                "Update available",
+                f"Notification Watcher {latest.version} is available.\n\n"
+                "Open the tray menu → Updates → Check for updates...",
+            ),
+        )
+
+    def _check_for_updates(self, _icon, _item) -> None:
+        result = check_for_updates(force=True)
+        if result.error:
+            messagebox.showerror("Updates", f"Could not check for updates:\n\n{result.error}")
+            return
+        latest = result.latest
+        if latest is None:
+            messagebox.showinfo("Updates", "No release information found.")
+            return
+        if not result.update_available:
+            messagebox.showinfo("Updates", f"You are on the latest version ({__version__}).")
+            return
+
+        notes = latest.release_notes
+        if len(notes) > 400:
+            notes = notes[:397] + "..."
+        message = f"Version {latest.version} is available.\n\nYou are on {__version__}."
+        if notes:
+            message += f"\n\n{notes}"
+
+        if not is_bundled_app():
+            if messagebox.askyesno("Update available", message + "\n\nOpen download page?"):
+                subprocess.run(["cmd", "/c", "start", "", release_page_url()], check=False)
+            return
+
+        if not messagebox.askyesno("Update available", message + "\n\nDownload and install now?"):
+            return
+
+        try:
+            script_or_target = download_and_install(latest)
+        except Exception as exc:
+            messagebox.showerror("Updates", f"Update failed:\n\n{exc}")
+            return
+
+        if sys.platform == "win32" and str(script_or_target).endswith(".bat"):
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", "/min", str(script_or_target)],
+                creationflags=subprocess.DETACHED_PROCESS if hasattr(subprocess, "DETACHED_PROCESS") else 0,
+            )
+            self._quit(_icon, _item)
+            return
+
+        messagebox.showinfo("Updates", f"Installed to:\n{script_or_target}")
 
     def _edit_config(self, _icon, _item) -> None:
         path = get_config_path()

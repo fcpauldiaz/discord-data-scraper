@@ -17,6 +17,7 @@ class AppConfig:
     webhook_discord_only: bool = False
     launch_at_login: bool = False
     webhook_format: WebhookFormat = "auto"
+    check_for_updates: bool = True
 
     def effective_app_filter(self) -> str | None:
         if self.discord_only:

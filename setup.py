@@ -17,6 +17,7 @@ OPTIONS = {
         "CFBundleShortVersionString": __version__,
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
+        "SUFeedURL": "https://github.com/fcpauldiaz/discord-data-scraper/releases/latest/download/appcast.xml",
     },
 }
 

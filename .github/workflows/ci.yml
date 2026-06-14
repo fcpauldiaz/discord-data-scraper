@@ -84,6 +84,17 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name '*.dmg' -o -name '*.zip' \) -exec cp {} release/ \;
           ls -la release/
+      - name: Generate Sparkle appcast
+        run: |
+          VERSION=$(python -c "from notification_watcher.version import __version__; print(__version__)")
+          DMG=$(ls release/*.dmg | head -1)
+          SIZE=$(wc -c < "$DMG" | tr -d ' ')
+          DMG_NAME=$(basename "$DMG")
+          python scripts/generate_appcast.py \
+            --version "$VERSION" \
+            --dmg-url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${DMG_NAME}" \
+            --dmg-size "$SIZE" \
+            -o release/appcast.xml
       - name: Create or move version tag
         if: startsWith(github.ref, 'refs/heads/')
         run: |

@@ -143,9 +143,23 @@ SIGN_IDENTITY="Developer ID Application: Your Name" ./scripts/sign_and_notarize_
 
 See [PRIVACY.md](PRIVACY.md). No telemetry.
 
-## Future: auto-update
+## Auto-update
 
-v1.1 does not ship Sparkle/WinSparkle. To add later, set `SUFeedURL` in the macOS app plist and host an appcast XML on GitHub Releases.
+Bundled macOS and Windows builds check [GitHub Releases](https://github.com/fcpauldiaz/discord-data-scraper/releases) for updates:
+
+- **On startup** (after 60 seconds) and **once per day**
+- **Manual check**: menu bar / tray → **Updates → Check for updates...**
+- **macOS**: downloads the DMG, installs to `/Applications`, offers restart
+- **Windows**: downloads the zip, applies on quit via a small updater script, then relaunches
+- **Running from source**: opens the release download page instead of installing in place
+
+Disable automatic checks in `config.json`:
+
+```json
+{ "check_for_updates": false }
+```
+
+CI also publishes `appcast.xml` on each release for optional future [Sparkle](https://sparkle-project.org/) integration (`SUFeedURL` is set in the macOS app plist).
 
 ## License
 

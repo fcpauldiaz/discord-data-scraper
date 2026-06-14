@@ -80,6 +80,7 @@ def load_config() -> AppConfig:
         webhook_discord_only=bool(data.get("webhook_discord_only", False)),
         launch_at_login=bool(data.get("launch_at_login", False)),
         webhook_format=_parse_webhook_format(data.get("webhook_format")),
+        check_for_updates=bool(data.get("check_for_updates", True)),
     )
 
 
@@ -94,6 +95,7 @@ def save_config(config: AppConfig) -> None:
         "webhook_discord_only": config.webhook_discord_only,
         "launch_at_login": config.launch_at_login,
         "webhook_format": config.webhook_format,
+        "check_for_updates": config.check_for_updates,
     }
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 

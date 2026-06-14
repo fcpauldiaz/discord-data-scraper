@@ -23,7 +23,7 @@ Webhook destinations (e.g. Discord, your own server) are chosen by you. Their pr
 
 ## Telemetry
 
-This app does not include telemetry, crash reporting, or automatic update checks in v1.1.0.
+This app checks GitHub Releases for newer versions when `check_for_updates` is enabled (default). No other telemetry, crash reporting, or third-party analytics.
 
 ## Contact
 
