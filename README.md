@@ -77,7 +77,12 @@ Output: `dist/NotificationWatcher/NotificationWatcher.exe`
 
 ## CI artifacts
 
-GitHub Actions runs tests on Ubuntu and builds unsigned macOS DMG + Windows zip on every push. Tagged releases (`v*`) attach both artifacts to a GitHub Release.
+GitHub Actions runs tests on every push/PR. On pushes to `main`, it also builds macOS and Windows artifacts, creates a **`v{version}` tag** from [`notification_watcher/version.py`](notification_watcher/version.py), and publishes a [GitHub Release](https://github.com/fcpauldiaz/discord-data-scraper/releases) with download links for:
+
+- `NotificationWatcher-{version}.dmg` (macOS)
+- `NotificationWatcher-{version}-win.zip` (Windows)
+
+Bump `__version__` in `notification_watcher/version.py` before merging to `main` to publish a new release tag.
 
 ## Signing (local)
 

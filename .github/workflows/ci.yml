@@ -5,8 +5,6 @@ on:
     branches: [main, master]
     tags: ["v*"]
   pull_request:
-  release:
-    types: [published]
 
 jobs:
   test:
@@ -21,6 +19,7 @@ jobs:
 
   build-mac:
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +37,7 @@ jobs:
 
   build-win:
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,21 +58,55 @@ jobs:
           path: dist/*.zip
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     needs: [build-mac, build-win]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Resolve version
+        id: version
+        run: |
+          VERSION=$(python -c "from notification_watcher.version import __version__; print(__version__)")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
       - name: Collect release files
         run: |
           mkdir -p release
           find artifacts -type f \( -name '*.dmg' -o -name '*.zip' \) -exec cp {} release/ \;
           ls -la release/
-      - uses: softprops/action-gh-release@v2
+      - name: Create or move version tag
+        if: startsWith(github.ref, 'refs/heads/')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag -f "$TAG" "${{ github.sha }}"
+          git push origin "$TAG" --force
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Notification Watcher ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## Downloads
+
+            | Platform | File |
+            |----------|------|
+            | macOS | `NotificationWatcher-*.dmg` — drag the app to Applications |
+            | Windows | `NotificationWatcher-*-win.zip` — extract and run `NotificationWatcher.exe` |
+
+            Assets are attached below.
           files: release/*
+          fail_on_unmatched_files: true
+          make_latest: true
