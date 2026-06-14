@@ -10,8 +10,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
@@ -22,15 +22,15 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -r requirements-app.txt
       - run: python3 scripts/generate_icons.py
       - run: python3 setup.py py2app
       - run: chmod +x create_dmg.sh && ./create_dmg.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: notification-watcher-macos
           path: dist/*.dmg
@@ -40,8 +40,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -r requirements-windows.txt -r requirements-dev.txt
@@ -52,7 +52,7 @@ jobs:
         run: |
           $version = python -c "from notification_watcher.version import __version__; print(__version__)"
           Compress-Archive -Path dist/NotificationWatcher -DestinationPath "dist/NotificationWatcher-$version-win.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: notification-watcher-windows
           path: dist/*.zip
@@ -64,13 +64,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - name: Resolve version
@@ -104,7 +104,7 @@ jobs:
           git tag -f "$TAG" "${{ github.sha }}"
           git push origin "$TAG" --force
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Notification Watcher ${{ steps.version.outputs.tag }}
