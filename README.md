@@ -1,6 +1,6 @@
 # Notification Watcher
 
-Cross-platform utility that watches OS notifications and optionally forwards them to HTTPS webhooks.
+Cross-platform utility that watches OS notifications and forwards them to Trade Platform when signed in.
 
 | Platform | Supported versions | Data source |
 |----------|-------------------|-------------|
@@ -13,7 +13,8 @@ Cross-platform utility that watches OS notifications and optionally forwards the
 - Recent notifications list with detail view
 - Configurable poll interval: 10 ms, 50 ms, 100 ms, 500 ms, 1 s
 - App filter (SQL LIKE) and Discord-only shortcut
-- Webhooks: Discord embed format (auto-detected) or generic JSON
+- Account sign-in to Trade Platform (no manual URLs to configure)
+- Forwards alerts to the platform ingest endpoint automatically
 - Persistent settings, launch at login, local logs
 - CLI (`scraper.py`) for scripting
 
@@ -40,11 +41,11 @@ python windows_app.py
 ### CLI (either platform)
 
 ```bash
-python3 scraper.py                  # watch + webhooks
+python3 scraper.py                  # watch + forward to ingest
 python3 scraper.py --once           # dump once
 python3 scraper.py --discord-only
 python3 scraper.py --poll 0.5
-python3 scraper.py --no-webhook
+python3 scraper.py --no-ingest
 ```
 
 Config file location:
@@ -77,6 +78,8 @@ Output: `dist/NotificationWatcher/NotificationWatcher.exe`
 
 ## CI artifacts
 
+See [INSTALL.md](INSTALL.md) for end-user setup (macOS FDA, Windows, sign-in).
+
 GitHub Actions runs tests on every push/PR. On pushes to `main`, it also builds macOS and Windows artifacts, creates a **`v{version}` tag** from [`notification_watcher/version.py`](notification_watcher/version.py), and publishes a [GitHub Release](https://github.com/fcpauldiaz/discord-data-scraper/releases) with download links for:
 
 - `NotificationWatcher-{version}.dmg` (macOS)
@@ -96,12 +99,10 @@ SIGN_IDENTITY="Developer ID Application: Your Name" ./scripts/sign_and_notarize_
 ./scripts/sign_windows.ps1
 ```
 
-## Webhook format
+## Filtering
 
-- URLs matching `discord.com/api/webhooks` receive Discord **embed** payloads.
-- Other HTTPS URLs receive generic JSON: `app_id`, `title`, `subtitle`, `body`, `delivered_date`, `platform`.
-- Set `"webhook_format": "discord"` or `"generic"` in config to override auto-detect.
-- Set `"webhook_discord_only": true` to forward only Discord app notifications.
+- Set `"discord_only": true` in config to forward only Discord app notifications.
+- Set `"app_filter": "%slack%"` (SQL LIKE) to limit by app bundle id.
 
 ## Troubleshooting
 
@@ -109,7 +110,7 @@ SIGN_IDENTITY="Developer ID Application: Your Name" ./scripts/sign_and_notarize_
 
 1. Confirm Full Disk Access is enabled for the app.
 2. Check status in the menu: should say **Watching**.
-3. Open logs via Webhooks → View logs.
+3. Open logs via Account → View logs.
 
 ### Windows: no notifications
 
@@ -117,11 +118,11 @@ SIGN_IDENTITY="Developer ID Application: Your Name" ./scripts/sign_and_notarize_
 2. Send a test toast; WAL mode may add slight delay.
 3. Check `%APPDATA%\Notification Watcher\notification_watcher.log`.
 
-### Webhooks fail
+### Connection test fails
 
-- Use HTTPS public URLs only (localhost/private IPs are blocked).
-- For Discord, use a full webhook URL from Server Settings → Integrations.
-- Use Webhooks → Test webhook to verify.
+- Sign in via **Account → Sign in…** with your Trade Platform credentials.
+- Confirm an active Pro subscription on the platform.
+- Use **Account → Test connection** to verify.
 
 ## Uninstall
 

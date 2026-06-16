@@ -15,8 +15,9 @@ from tkinter import messagebox, simpledialog
 import pystray
 from PIL import Image, ImageDraw
 
-import webhook_sender
-from notification_watcher.config import get_config_path, get_log_path, load_config, save_config
+import ingest_sender
+from notification_watcher.auth import AuthError, sign_in
+from notification_watcher.config import get_app_logger, get_log_path, load_config, save_config
 from notification_watcher.login import is_launch_at_login_enabled, set_launch_at_login
 from notification_watcher.platform import get_backend
 from notification_watcher.types import AppConfig
@@ -100,7 +101,7 @@ class WindowsNotificationApp:
         threading.Thread(target=self._drain_loop, daemon=True).start()
         threading.Thread(target=self._permission_loop, daemon=True).start()
         self._update_watcher()
-        webhook_sender.get_app_logger().info("Windows app started (db=%s)", self._db_path)
+        get_app_logger().info("Windows app started (db=%s)", self._db_path)
 
     def _permission_loop(self) -> None:
         import time
@@ -164,7 +165,7 @@ class WindowsNotificationApp:
                 except queue.Empty:
                     break
                 app_id, title, subtitle, body, delivered_date = item
-                webhook_sender.send_notification_webhook(
+                ingest_sender.send_notification(
                     app_id, title, subtitle, body, delivered_date, self._config
                 )
                 self._recent.insert(0, item)
@@ -230,13 +231,12 @@ class WindowsNotificationApp:
         items.append(pystray.Menu.SEPARATOR)
         items.append(
             pystray.MenuItem(
-                "Webhooks",
+                "Account",
                 pystray.Menu(
-                    pystray.MenuItem("Add webhook URL...", self._add_webhook),
-                    pystray.MenuItem("Test webhook", self._test_webhook),
-                    pystray.MenuItem("Clear all webhooks", self._clear_webhooks),
+                    pystray.MenuItem("Sign in...", self._sign_in),
+                    pystray.MenuItem("Sign out", self._sign_out),
+                    pystray.MenuItem("Test connection", self._test_connection),
                     pystray.MenuItem("View logs", self._view_logs),
-                    pystray.MenuItem("Open config file", self._edit_config),
                 ),
             )
         )
@@ -318,39 +318,49 @@ class WindowsNotificationApp:
         self._config.launch_at_login = is_launch_at_login_enabled()
         save_config(self._config)
 
-    def _add_webhook(self, _icon, _item) -> None:
-        url = simpledialog.askstring(
-            "Add webhook",
-            "Enter HTTPS webhook URL:",
-            initialvalue="https://",
+    def _sign_in(self, _icon, _item) -> None:
+        email = simpledialog.askstring(
+            "Sign in",
+            "Trade Platform email:",
+            initialvalue=self._config.account_email or "",
             parent=self._tk_root,
         )
-        if not url:
+        if not email:
             return
-        error = webhook_sender.validate_webhook_url(url.strip())
-        if error:
-            messagebox.showerror("Add webhook", error)
+        password = simpledialog.askstring(
+            "Sign in",
+            "Password:",
+            show="*",
+            parent=self._tk_root,
+        )
+        if password is None:
             return
-        if url.strip() in self._config.webhook_urls:
-            messagebox.showinfo("Add webhook", "That URL is already in the list.")
+        try:
+            result = sign_in(email.strip(), password, self._config.platform_url)
+        except AuthError as exc:
+            messagebox.showerror("Sign in failed", str(exc))
             return
-        self._config.webhook_urls.append(url.strip())
+        self._config.auth_token = result["auth_token"]
+        self._config.ingest_url = result["ingest_url"]
+        self._config.account_email = result["account_email"]
         save_config(self._config)
+        messagebox.showinfo("Signed in", result["account_email"])
 
-    def _test_webhook(self, _icon, _item) -> None:
-        ok, message = webhook_sender.send_test_webhook()
-        if ok:
-            messagebox.showinfo("Webhook test", message)
-        else:
-            messagebox.showerror("Webhook test failed", message)
-
-    def _clear_webhooks(self, _icon, _item) -> None:
-        if not self._config.webhook_urls:
-            messagebox.showinfo("Webhooks", "No webhooks configured.")
+    def _sign_out(self, _icon, _item) -> None:
+        if not self._config.is_signed_in():
+            messagebox.showinfo("Account", "Not signed in.")
             return
-        if messagebox.askyesno("Webhooks", "Clear all webhook URLs?"):
-            self._config.webhook_urls = []
-            save_config(self._config)
+        self._config.auth_token = None
+        self._config.account_email = None
+        save_config(self._config)
+        messagebox.showinfo("Account", "Signed out.")
+
+    def _test_connection(self, _icon, _item) -> None:
+        ok, message = ingest_sender.send_test_connection()
+        if ok:
+            messagebox.showinfo("Connection test", message)
+        else:
+            messagebox.showerror("Connection test failed", message)
 
     def _view_logs(self, _icon, _item) -> None:
         path = get_log_path()
@@ -415,13 +425,6 @@ class WindowsNotificationApp:
             return
 
         messagebox.showinfo("Updates", f"Installed to:\n{script_or_target}")
-
-    def _edit_config(self, _icon, _item) -> None:
-        path = get_config_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            save_config(self._config)
-        subprocess.run(["notepad.exe", str(path)], check=False)
 
     def _quit(self, _icon, _item) -> None:
         self._stop_thread.set()

@@ -9,17 +9,17 @@ Notification Watcher is a local utility. It does not operate a cloud service or 
 
 ## What leaves your device
 
-- If you configure **webhook URLs**, matching notification data is sent via HTTPS POST to those endpoints only.
-- No data is sent if no webhooks are configured.
+- When signed in to Trade Platform, matching notification data is sent via HTTPS POST to the platform ingest endpoint.
+- No data is sent if you are not signed in.
 
 ## What is stored locally
 
 - Settings: `config.json` in the app support directory.
-- Logs: `notification_watcher.log` in the same directory (webhook attempts, errors).
+- Logs: `notification_watcher.log` in the same directory (ingest attempts, errors).
 
 ## Third parties
 
-Webhook destinations (e.g. Discord, your own server) are chosen by you. Their privacy policies apply to data you send them.
+When signed in, notifications are sent to your Trade Platform ingest endpoint. The platform privacy policy applies to that data.
 
 ## Telemetry
 

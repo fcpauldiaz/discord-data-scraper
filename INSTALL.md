@@ -1,0 +1,69 @@
+# Notification Watcher — Install Guide
+
+End-user setup for macOS and Windows.
+
+## Download
+
+Get the latest release from [GitHub Releases](https://github.com/fcpauldiaz/discord-data-scraper/releases):
+
+- **macOS:** `NotificationWatcher.dmg`
+- **Windows:** `NotificationWatcher.zip`
+
+## macOS
+
+1. Open the DMG and drag **Notification Watcher** to Applications.
+2. Launch the app from Applications.
+3. Grant **Full Disk Access** (System Settings → Privacy & Security → Full Disk Access → add Notification Watcher).
+4. Menu bar icon should show **Status: Watching** when ready.
+
+### macOS Sequoia / Tahoe
+
+If notifications are not detected, remove and re-add Full Disk Access, then restart the app.
+
+## Windows
+
+1. Extract the zip to a folder (e.g. `C:\NotificationWatcher`).
+2. Run `NotificationWatcher.exe`.
+3. If SmartScreen warns about an unsigned app, choose **More info → Run anyway** (releases are unsigned until code signing is configured in CI).
+
+## Connect to Trade Platform
+
+1. Sign up at your Trade Platform URL and subscribe to Pro.
+2. Connect Tradier or Schwab under **Connections**, complete onboarding.
+3. In Notification Watcher: **Account → Sign in…** with the same email and password.
+4. Use **Account → Test connection** to verify delivery.
+
+No URL to copy — the desktop app connects automatically after sign-in.
+
+## Example config.json
+
+Stored in the app support directory:
+
+- macOS: `~/Library/Application Support/Notification Watcher/config.json`
+- Windows: `%APPDATA%\Notification Watcher\config.json`
+
+```json
+{
+  "poll_seconds": 0.5,
+  "discord_only": false,
+  "app_filter": "%discord%",
+  "platform_url": "https://app.yourdomain.com",
+  "ingest_url": "https://api.yourdomain.com/v1/ingest",
+  "auth_token": null,
+  "account_email": null,
+  "check_for_updates": true
+}
+```
+
+## Updates
+
+Bundled apps check GitHub Releases automatically. Use **Check for updates…** in the menu to install manually.
+
+## Code signing (maintainers)
+
+CI builds are unsigned by default. For production distribution, configure:
+
+- **macOS:** Apple Developer ID + notarization in CI
+- **Windows:** Authenticode certificate
+
+See `.github/workflows/ci.yml` and signing scripts in the repo.

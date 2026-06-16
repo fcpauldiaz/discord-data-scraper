@@ -9,9 +9,9 @@ from notification_watcher.types import AppConfig
 
 def test_default_config():
     cfg = default_config()
-    assert cfg.webhook_urls == []
+    assert cfg.auth_token is None
     assert cfg.poll_seconds == 0.5
-    assert cfg.webhook_format == "auto"
+    assert cfg.is_signed_in() is False
 
 
 def test_config_round_trip(tmp_path: Path, monkeypatch):
@@ -20,23 +20,25 @@ def test_config_round_trip(tmp_path: Path, monkeypatch):
         lambda: tmp_path / "config.json",
     )
     cfg = AppConfig(
-        webhook_urls=["https://example.com/hook"],
         poll_seconds=0.1,
         discord_only=True,
         app_filter="%slack%",
-        webhook_discord_only=True,
         launch_at_login=True,
-        webhook_format="discord",
+        auth_token="secret-token",
+        account_email="user@example.com",
+        ingest_url="https://api.example.com/v1/ingest",
+        platform_url="https://app.example.com",
     )
     save_config(cfg)
     loaded = load_config()
-    assert loaded.webhook_urls == ["https://example.com/hook"]
     assert loaded.poll_seconds == 0.1
     assert loaded.discord_only is True
     assert loaded.app_filter == "%slack%"
-    assert loaded.webhook_discord_only is True
     assert loaded.launch_at_login is True
-    assert loaded.webhook_format == "discord"
+    assert loaded.auth_token == "secret-token"
+    assert loaded.account_email == "user@example.com"
+    assert loaded.ingest_url == "https://api.example.com/v1/ingest"
+    assert loaded.platform_url == "https://app.example.com"
 
 
 def test_effective_app_filter():

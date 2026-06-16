@@ -9,8 +9,9 @@ from pathlib import Path
 
 import rumps
 
-import webhook_sender
-from notification_watcher.config import get_config_path, get_log_path, load_config, save_config
+import ingest_sender
+from notification_watcher.auth import AuthError, sign_in
+from notification_watcher.config import get_app_logger, get_log_path, load_config, save_config
 from notification_watcher.login import is_launch_at_login_enabled, open_full_disk_access_settings, set_launch_at_login
 from notification_watcher.macos import format_delivered_date, get_notification_db_path
 from notification_watcher.platform import get_backend
@@ -78,13 +79,12 @@ class NotificationWatcherApp(rumps.App):
             rumps.MenuItem("Launch at login", callback=self._toggle_launch_at_login),
             None,
             [
-                "Webhooks",
+                "Account",
                 [
-                    rumps.MenuItem("Add webhook URL...", callback=self._add_webhook),
-                    rumps.MenuItem("Test webhook", callback=self._test_webhook),
-                    rumps.MenuItem("Clear all webhooks", callback=self._clear_webhooks),
+                    rumps.MenuItem("Sign in...", callback=self._sign_in),
+                    rumps.MenuItem("Sign out", callback=self._sign_out),
+                    rumps.MenuItem("Test connection", callback=self._test_connection),
                     rumps.MenuItem("View logs", callback=self._view_logs),
-                    rumps.MenuItem("Open config file", callback=self._edit_webhook_config),
                 ],
             ],
             None,
@@ -103,6 +103,7 @@ class NotificationWatcherApp(rumps.App):
         self._recent_menu = self.menu["Recent"]
         self._launch_item = self.menu["Launch at login"]
         self._discord_item = self.menu["Discord only"]
+        self._refresh_account_status()
 
         self._apply_poll_menu_state()
         self._discord_item.state = self._discord_only
@@ -116,7 +117,7 @@ class NotificationWatcherApp(rumps.App):
         self._update_status_from_db()
         if self._config.check_for_updates:
             schedule_background_checks(self._notify_update_available, enabled=True)
-        webhook_sender.get_app_logger().info("App started (db=%s)", self._db_path)
+        get_app_logger().info("App started (db=%s)", self._db_path)
 
     def _save_config(self) -> None:
         self._config.poll_seconds = self._poll_seconds
@@ -236,62 +237,71 @@ class NotificationWatcherApp(rumps.App):
         self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
         self._watcher_thread.start()
 
-    def _add_webhook(self, _: rumps.MenuItem) -> None:
-        window = rumps.Window(
-            message="Enter HTTPS webhook URL:",
-            title="Add webhook",
-            default_text="https://",
-            ok="Add",
+    def _refresh_account_status(self) -> None:
+        if self._config.is_signed_in():
+            email = self._config.account_email or "signed in"
+            self._set_status(f"Signed in as {email}")
+        elif self._status == "Watching":
+            self._set_status("Watching (not signed in)")
+
+    def _sign_in(self, _: rumps.MenuItem) -> None:
+        email_window = rumps.Window(
+            message="Trade Platform email:",
+            title="Sign in",
+            default_text=self._config.account_email or "",
+            ok="Next",
             cancel="Cancel",
         )
-        response = window.run()
-        if response.clicked != 1:
+        email_response = email_window.run()
+        if email_response.clicked != 1:
             return
-        url = (response.text or "").strip()
-        if not url:
-            rumps.alert("URL is empty.", "Add webhook")
+        email = (email_response.text or "").strip()
+        if not email:
+            rumps.alert("Email is required.", "Sign in")
             return
-        error = webhook_sender.validate_webhook_url(url)
-        if error:
-            rumps.alert(error, "Add webhook")
-            return
-        if url in self._config.webhook_urls:
-            rumps.alert("That URL is already in the list.", "Add webhook")
-            return
-        self._config.webhook_urls.append(url)
-        save_config(self._config)
-        rumps.notification(
-            "Notification Watcher",
-            "Webhook added",
-            url[:60] + "..." if len(url) > 60 else url,
+        password_window = rumps.Window(
+            message="Password:",
+            title="Sign in",
+            default_text="",
+            ok="Sign in",
+            cancel="Cancel",
         )
-
-    def _test_webhook(self, _: rumps.MenuItem) -> None:
-        ok, message = webhook_sender.send_test_webhook()
-        title = "Webhook test" if ok else "Webhook test failed"
-        rumps.alert(message, title)
-
-    def _clear_webhooks(self, _: rumps.MenuItem) -> None:
-        if not self._config.webhook_urls:
-            rumps.alert("No webhooks configured.", "Webhooks")
+        password_response = password_window.run()
+        if password_response.clicked != 1:
             return
-        if rumps.alert("Clear all webhook URLs?", "Webhooks", ok="Clear all", cancel="Cancel") == 1:
-            self._config.webhook_urls = []
-            save_config(self._config)
-            rumps.notification("Notification Watcher", "All webhooks cleared", "")
+        password = password_response.text or ""
+        try:
+            result = sign_in(email, password, self._config.platform_url)
+        except AuthError as exc:
+            rumps.alert(str(exc), "Sign in failed")
+            return
+        self._config.auth_token = result["auth_token"]
+        self._config.ingest_url = result["ingest_url"]
+        self._config.account_email = result["account_email"]
+        save_config(self._config)
+        self._refresh_account_status()
+        rumps.notification("Notification Watcher", "Signed in", result["account_email"])
+
+    def _sign_out(self, _: rumps.MenuItem) -> None:
+        if not self._config.is_signed_in():
+            rumps.alert("Not signed in.", "Account")
+            return
+        self._config.auth_token = None
+        self._config.account_email = None
+        save_config(self._config)
+        self._update_status_from_db()
+        rumps.notification("Notification Watcher", "Signed out", "")
+
+    def _test_connection(self, _: rumps.MenuItem) -> None:
+        ok, message = ingest_sender.send_test_connection()
+        title = "Connection test" if ok else "Connection test failed"
+        rumps.alert(message, title)
 
     def _view_logs(self, _: rumps.MenuItem) -> None:
         path = get_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text("", encoding="utf-8")
-        subprocess.run(["open", "-e", str(path)], check=False, timeout=5)
-
-    def _edit_webhook_config(self, _: rumps.MenuItem) -> None:
-        path = get_config_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            save_config(self._config)
         subprocess.run(["open", "-e", str(path)], check=False, timeout=5)
 
     def _drain_queue(self, _: rumps.Timer) -> None:
@@ -301,7 +311,7 @@ class NotificationWatcherApp(rumps.App):
             except queue.Empty:
                 break
             app_id, title, subtitle, body, delivered_date = item
-            webhook_sender.send_notification_webhook(
+            ingest_sender.send_notification(
                 app_id, title, subtitle, body, delivered_date, self._config
             )
             self._recent.insert(0, item)

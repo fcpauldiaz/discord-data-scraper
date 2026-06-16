@@ -7,7 +7,7 @@ DATA_FILES = [("assets", ["assets/icon.icns", "assets/icon.png"])]
 OPTIONS = {
     "argv_emulation": False,
     "iconfile": "assets/icon.icns",
-    "includes": ["notification_watcher", "webhook_sender"],
+    "includes": ["notification_watcher", "ingest_sender"],
     "packages": ["rumps", "objc", "Foundation", "AppKit"],
     "plist": {
         "CFBundleName": "Notification Watcher",

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import webhook_sender
+import ingest_sender
 from notification_watcher.config import load_config
 from notification_watcher.platform import get_backend
 from notification_watcher.watcher import watch
@@ -44,7 +44,7 @@ def run_watch(
     db_path: Path,
     poll_seconds: float,
     app_filter: str | None,
-    no_webhook: bool,
+    no_ingest: bool,
     backend,
 ) -> None:
     config = load_config()
@@ -52,8 +52,8 @@ def run_watch(
 
     def on_notification(app_id: str, title: str, subtitle: str, body: str, delivered_date):
         print_notification(app_id, title, subtitle, body, delivered_date, backend)
-        if not no_webhook:
-            webhook_sender.send_notification_webhook(
+        if not no_ingest:
+            ingest_sender.send_notification(
                 app_id, title, subtitle, body, delivered_date, config
             )
 
@@ -94,9 +94,9 @@ def main() -> None:
         help="Path to notification db (default: auto-detect).",
     )
     parser.add_argument(
-        "--no-webhook",
+        "--no-ingest",
         action="store_true",
-        help="Do not send notifications to configured webhook URLs.",
+        help="Do not forward notifications to the ingest endpoint.",
     )
     parser.add_argument(
         "--filter",
@@ -125,7 +125,7 @@ def main() -> None:
         if args.once:
             run_once(db_path, app_filter, backend)
         else:
-            run_watch(db_path, poll_seconds, app_filter, args.no_webhook, backend)
+            run_watch(db_path, poll_seconds, app_filter, args.no_ingest, backend)
     except FileNotFoundError as e:
         print(e)
         raise SystemExit(1)

@@ -4,7 +4,8 @@ import os
 import sys
 from pathlib import Path
 
-from notification_watcher.types import AppConfig, WebhookFormat
+from notification_watcher.product import DEFAULT_INGEST_URL, DEFAULT_PLATFORM_URL
+from notification_watcher.types import AppConfig
 
 CONFIG_DIR_NAME = "Notification Watcher"
 CONFIG_FILENAME = "config.json"
@@ -43,12 +44,6 @@ def get_app_logger() -> logging.Logger:
     return logger
 
 
-def _parse_webhook_format(value: object) -> WebhookFormat:
-    if value in ("auto", "discord", "generic"):
-        return value
-    return "auto"
-
-
 def default_config() -> AppConfig:
     return AppConfig()
 
@@ -63,24 +58,23 @@ def load_config() -> AppConfig:
         return default_config()
     if not isinstance(data, dict):
         return default_config()
-    urls = data.get("webhook_urls")
-    webhook_urls = (
-        [u.strip() for u in urls if isinstance(u, str) and u.strip()]
-        if isinstance(urls, list)
-        else []
-    )
     poll = data.get("poll_seconds")
     poll_seconds = float(poll) if isinstance(poll, (int, float)) and poll > 0 else 0.5
     app_filter = data.get("app_filter")
+    platform_url = data.get("platform_url")
+    ingest_url = data.get("ingest_url")
+    auth_token = data.get("auth_token")
+    account_email = data.get("account_email")
     return AppConfig(
-        webhook_urls=webhook_urls,
         poll_seconds=poll_seconds,
         discord_only=bool(data.get("discord_only", False)),
         app_filter=app_filter if isinstance(app_filter, str) and app_filter else None,
-        webhook_discord_only=bool(data.get("webhook_discord_only", False)),
         launch_at_login=bool(data.get("launch_at_login", False)),
-        webhook_format=_parse_webhook_format(data.get("webhook_format")),
         check_for_updates=bool(data.get("check_for_updates", True)),
+        platform_url=platform_url if isinstance(platform_url, str) and platform_url else DEFAULT_PLATFORM_URL,
+        ingest_url=ingest_url if isinstance(ingest_url, str) and ingest_url else DEFAULT_INGEST_URL,
+        auth_token=auth_token if isinstance(auth_token, str) and auth_token else None,
+        account_email=account_email if isinstance(account_email, str) and account_email else None,
     )
 
 
@@ -88,23 +82,14 @@ def save_config(config: AppConfig) -> None:
     path = get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        "webhook_urls": config.webhook_urls,
         "poll_seconds": config.poll_seconds,
         "discord_only": config.discord_only,
         "app_filter": config.app_filter,
-        "webhook_discord_only": config.webhook_discord_only,
         "launch_at_login": config.launch_at_login,
-        "webhook_format": config.webhook_format,
         "check_for_updates": config.check_for_updates,
+        "platform_url": config.platform_url,
+        "ingest_url": config.ingest_url,
+        "auth_token": config.auth_token,
+        "account_email": config.account_email,
     }
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def load_webhook_urls() -> list[str]:
-    return load_config().webhook_urls
-
-
-def save_webhook_urls(urls: list[str]) -> None:
-    config = load_config()
-    config.webhook_urls = urls
-    save_config(config)
